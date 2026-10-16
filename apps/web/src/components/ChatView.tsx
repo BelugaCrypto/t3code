@@ -534,6 +534,7 @@ import {
   scheduleEnvironmentReconnectWarning,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  shouldCompactBeforeSend,
   shouldShowBranchMismatchBanner,
   shouldShowPlanFollowUpPrompt,
   shouldOpenProactivePullRequest,
@@ -8873,10 +8874,11 @@ export default function ChatView(props: ChatViewProps) {
     // A stale Claude session compacts before this message so the turn does not re-read the
     // old history. The message queues behind the /compact run, since steering into it is
     // rejected.
-    const compactBeforeSend =
-      resumeCompactionTokens !== null &&
-      !keepFullHistory &&
-      messageTextForSend.toLowerCase() !== "/compact";
+    const compactBeforeSend = shouldCompactBeforeSend({
+      resumeCompactionTokens,
+      keepFullHistory,
+      messageText: messageTextForSend,
+    });
     const turnDispatchMode = compactBeforeSend || sendQueuesBehindSetup ? "queue" : dispatchMode;
     const shouldQueueBehindActiveRun =
       compactBeforeSend ||
