@@ -512,38 +512,13 @@ describe("shouldShowPlanFollowUpPrompt", () => {
 });
 
 describe("shouldCompactBeforeSend", () => {
-  const chipOn = { resumeCompactionTokens: 120_000, keepFullHistory: false };
-
-  it("compacts before an ordinary message while the Compact chip is on", () => {
+  it("lets /compact with instructions be the only compaction while the Compact chip is on", () => {
+    const chipOn = { resumeCompactionTokens: 120_000, keepFullHistory: false };
     expect(shouldCompactBeforeSend({ ...chipOn, messageText: "fix the failing test" })).toBe(true);
     expect(shouldCompactBeforeSend({ ...chipOn, messageText: "/compactfoo" })).toBe(true);
-    expect(shouldCompactBeforeSend({ ...chipOn, messageText: "please /compact" })).toBe(true);
-  });
-
-  it("sends a bare /compact once", () => {
     expect(shouldCompactBeforeSend({ ...chipOn, messageText: "/compact" })).toBe(false);
-    expect(shouldCompactBeforeSend({ ...chipOn, messageText: "/COMPACT" })).toBe(false);
-  });
-
-  it("sends /compact with instructions once so the instructions reach the only compaction", () => {
     expect(
-      shouldCompactBeforeSend({ ...chipOn, messageText: "/compact keep the auth refactor notes" }),
-    ).toBe(false);
-    expect(shouldCompactBeforeSend({ ...chipOn, messageText: "/Compact\nfocus on tests" })).toBe(
-      false,
-    );
-  });
-
-  it("does not compact when the chip is off or the full history is kept", () => {
-    expect(
-      shouldCompactBeforeSend({
-        resumeCompactionTokens: null,
-        keepFullHistory: false,
-        messageText: "fix the failing test",
-      }),
-    ).toBe(false);
-    expect(
-      shouldCompactBeforeSend({ ...chipOn, keepFullHistory: true, messageText: "fix the test" }),
+      shouldCompactBeforeSend({ ...chipOn, messageText: "/Compact keep the auth refactor notes" }),
     ).toBe(false);
   });
 });

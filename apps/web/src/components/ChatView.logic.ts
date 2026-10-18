@@ -929,6 +929,8 @@ export function shouldShowPlanFollowUpPrompt(input: {
   );
 }
 
+// A typed `/compact`, with or without instructions, is already the compaction. Queueing a
+// bare one ahead of it would run an uninstructed compaction first and charge for two.
 const COMPACT_COMMAND_PATTERN = /^\/compact(?:\s|$)/i;
 
 export function shouldCompactBeforeSend(input: {
