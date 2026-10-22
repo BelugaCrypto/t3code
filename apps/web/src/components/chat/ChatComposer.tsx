@@ -2364,7 +2364,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     environmentUnavailable !== null ||
     composerSubmissionError !== null ||
     providerInputSubmissionError !== null ||
-    hasImageAttachmentAttention;
+    hasImageAttachmentAttention ||
+    preparingComposerImages.length > 0;
   const isComposerResting = shouldUseRestingComposerLayout({
     isExistingThread: routeKind === "server" && activeThreadId !== null,
     isMobileViewport,
@@ -2376,7 +2377,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const expandedComposerImages = isComposerResting
     ? standaloneComposerImages.filter((image) => pendingSnapShotIdSet.has(image.id))
     : standaloneComposerImages;
-  const expandedPreparingImages = isComposerResting ? [] : preparingComposerImages;
   const composerControlsCollapsed = isComposerResting || isComposerCollapsedMobile;
   const showInlineRestingControls = composerControlsCollapsed && restingControlsHost === null;
   const composerControlsVisibleInStrip =
@@ -3371,11 +3371,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (uncommittedSnapShotIds.length > 0 ||
       composerVideos.length > 0 ||
       expandedComposerImages.length > 0 ||
-      expandedPreparingImages.length > 0) ? (
+      preparingComposerImages.length > 0) ? (
       <ComposerAttachmentMediaRow
         images={composerImages}
         expandedImages={expandedComposerImages}
-        preparingImages={expandedPreparingImages}
+        preparingImages={preparingComposerImages}
         videos={composerVideos}
         pendingSnapShotAnimations={pendingSnapShotAnimations}
         pendingSnapShotIds={pendingSnapShotIds}

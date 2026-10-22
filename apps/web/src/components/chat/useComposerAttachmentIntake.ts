@@ -256,14 +256,16 @@ export function useComposerAttachmentIntake(input: {
     addPreparingComposerImages(attachmentTargetKey, preparingImages);
     if (questionAttachmentTarget)
       changeQuestionAttachmentPreparation(questionAttachmentTarget, acceptedImages.length);
-    try {
+    const compressImages = async () => {
       const nextImages: ComposerImageAttachment[] = [];
       let compressionError: string | null = null;
       for (const { id, file } of preparingImages) {
+        // A rejection must still reach the cleanup below: a leaked
+        // placeholder would block sending from this draft for good.
         const compressed = await prepareImageForAttachment(
           file,
           PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-        );
+        ).catch(() => ({ ok: false, reason: "unreadable" }) as const);
         if (!compressed.ok) {
           compressionError =
             compressed.reason === "unreadable"
@@ -273,54 +275,54 @@ export function useComposerAttachmentIntake(input: {
         }
         const attachmentFile = compressed.file;
         inheritComposerImageThumbnail(file, attachmentFile);
-        const previewUrl = URL.createObjectURL(attachmentFile);
         nextImages.push({
           type: "image",
           id,
           name: attachmentFile.name || "image",
           mimeType: attachmentFile.type,
           sizeBytes: attachmentFile.size,
-          previewUrl,
+          previewUrl: URL.createObjectURL(attachmentFile),
           file: attachmentFile,
         });
       }
-      if (
-        questionAttachmentTarget &&
-        !useQuestionAttachmentPreparation.getState().counts[questionAttachmentTarget]
-      ) {
-        for (const image of nextImages) URL.revokeObjectURL(image.previewUrl);
-        return false;
-      }
-      const storedImageIds = new Set(
-        nextImages.length === 1 && nextImages[0]
-          ? addComposerImage(nextImages[0])
-          : nextImages.length > 1
-            ? addComposerImagesToDraft(nextImages)
-            : [],
-      );
-      const storedImages = nextImages.filter((image) => storedImageIds.has(image.id));
-      if (storedImages.length > 0 && imageAttachmentsGetChips) {
-        insertedAny =
-          insertAttachmentReferences(storedImages.map(imageContextReference)) || insertedAny;
-      }
-      // Only failures are reported here. Success must not pass `null`: by
-      // now other work (a failed send, an overlapping paste) may have set a
-      // thread error this call knows nothing about, and clearing it would
-      // swallow that message.
-      if (compressionError !== null) {
-        setThreadError(threadId, compressionError);
-      }
-      return insertedAny;
-    } finally {
-      // Runs in the same tick as the draft insert above, so the strip swaps
-      // placeholders for real tiles in one render.
-      if (questionAttachmentTarget)
-        changeQuestionAttachmentPreparation(questionAttachmentTarget, -acceptedImages.length);
-      removePreparingComposerImages(
-        attachmentTargetKey,
-        new Set(preparingImages.map((image) => image.id)),
-      );
+      return { nextImages, compressionError };
+    };
+    const { nextImages, compressionError } = await compressImages();
+    const questionDiscarded =
+      questionAttachmentTarget !== null &&
+      !useQuestionAttachmentPreparation.getState().counts[questionAttachmentTarget];
+    // Same tick as the draft insert below, so the strip swaps placeholders for
+    // real tiles in one render.
+    if (questionAttachmentTarget)
+      changeQuestionAttachmentPreparation(questionAttachmentTarget, -acceptedImages.length);
+    removePreparingComposerImages(
+      attachmentTargetKey,
+      new Set(preparingImages.map((image) => image.id)),
+    );
+    if (questionDiscarded) {
+      for (const image of nextImages) URL.revokeObjectURL(image.previewUrl);
+      return false;
     }
+    const storedImageIds = new Set(
+      nextImages.length === 1 && nextImages[0]
+        ? addComposerImage(nextImages[0])
+        : nextImages.length > 1
+          ? addComposerImagesToDraft(nextImages)
+          : [],
+    );
+    const storedImages = nextImages.filter((image) => storedImageIds.has(image.id));
+    if (storedImages.length > 0 && imageAttachmentsGetChips) {
+      insertedAny =
+        insertAttachmentReferences(storedImages.map(imageContextReference)) || insertedAny;
+    }
+    // Only failures are reported here. Success must not pass `null`: by
+    // now other work (a failed send, an overlapping paste) may have set a
+    // thread error this call knows nothing about, and clearing it would
+    // swallow that message.
+    if (compressionError !== null) {
+      setThreadError(threadId, compressionError);
+    }
+    return insertedAny;
   };
 
   const removeComposerImage = (imageId: string) => {
