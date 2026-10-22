@@ -34,6 +34,7 @@ import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerImageThumbnail } from "./ComposerImageThumbnail";
 import { composerFloatingLayerProps } from "./composerEventScope";
+import type { PreparingComposerImage } from "./preparingComposerImages";
 import {
   attachVideoThumbnail,
   buildExpandedImagePreview,
@@ -109,6 +110,7 @@ function SnapShotAttachmentFrame({
 export function ComposerAttachmentMediaRow({
   images,
   expandedImages,
+  preparingImages,
   videos,
   pendingSnapShotAnimations,
   pendingSnapShotIds,
@@ -127,6 +129,7 @@ export function ComposerAttachmentMediaRow({
 }: {
   readonly images: ReadonlyArray<ComposerImageAttachment>;
   readonly expandedImages: ReadonlyArray<ComposerImageAttachment>;
+  readonly preparingImages: ReadonlyArray<PreparingComposerImage>;
   readonly videos: ReadonlyArray<ComposerFileAttachment>;
   readonly pendingSnapShotAnimations: ReadonlyArray<PendingSnapShotAnimation>;
   readonly pendingSnapShotIds: ReadonlyArray<string>;
@@ -296,6 +299,37 @@ export function ComposerAttachmentMediaRow({
           );
         })
         .concat(
+          // Mirrors the image tile above, keyed by the id the compressed image
+          // takes, so React keeps the same thumbnail element through the swap.
+          preparingImages.map((image) => (
+            <SnapShotAttachmentFrame
+              key={image.id}
+              className="group/attachment relative h-16 w-16 shrink-0 snap-start overflow-hidden rounded-lg border border-border/80 bg-background"
+            >
+              <button
+                type="button"
+                className="h-full w-full"
+                aria-label={`Preview ${image.name}`}
+                disabled
+              >
+                <ComposerImageThumbnail
+                  file={image.file}
+                  alt={image.name}
+                  className="h-full w-full object-cover"
+                  fallback={
+                    <span className="flex h-full items-center justify-center px-1 text-3xs text-secondary-label">
+                      {image.name}
+                    </span>
+                  }
+                />
+              </button>
+              {supportsAttachmentUploads && (
+                <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-background/85 px-1 text-center text-3xs text-foreground">
+                  {formatAttachmentUploadProgress(0)}
+                </span>
+              )}
+            </SnapShotAttachmentFrame>
+          )),
           uncommittedSnapShotIds.map((captureId) => (
             <SnapShotAttachmentFrame
               key={captureId}
