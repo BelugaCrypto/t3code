@@ -758,10 +758,15 @@ const make = Effect.gen(function* () {
     const candidates = [
       ...[...groups].map(
         ([worktreePath, group]) =>
-          // A deleted thread still owns the worktree its remaining subagents share.
+          // A deleted thread still owns the worktree its remaining subagents share,
+          // but only deletion cleanup acts on it; otherwise the live rules apply.
           deletedByPath
             .get(worktreePath)
-            ?.find((deleted) => worktreeOwner([deleted, ...group]) === deleted) ??
+            ?.find(
+              (deleted) =>
+                resolveWorktreeCleanup(serverSettings, deleted.projectId).worktreeOnDelete &&
+                worktreeOwner([deleted, ...group]) === deleted,
+            ) ??
           worktreeOwner(group) ??
           group[0]!,
       ),
@@ -821,7 +826,6 @@ const make = Effect.gen(function* () {
         const changes = yield* localChangesReason(worktreePath, settings);
         if (changes !== null) return keep(changes);
         if (
-          !deleted &&
           group.some(
             (member) =>
               member.settledAt !== null &&
