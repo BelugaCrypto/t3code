@@ -262,6 +262,7 @@ const cleanupFixture = (
       storageCleanup,
     };
     let threads = [shell({ branch: "feature", worktreePath: worktree })];
+    let deletedThreads: OrchestrationV2ThreadShell[] = [];
     let storedWorktreePaths: string[] = [worktree];
     let projectRoots = [repo];
     let editBeforeRemoval = false;
@@ -358,12 +359,17 @@ const cleanupFixture = (
                   }),
                 },
               ]
-            : strings.join("").includes('AS "worktreePath"')
-              ? [
-                  ...threads.flatMap((thread) => thread.worktreePath ?? []),
-                  ...storedWorktreePaths,
-                ].map((worktreePath) => ({ worktreePath }))
-              : [],
+            : strings.join("").includes("deleted_at IS NOT NULL")
+              ? deletedThreads.map((thread) => ({
+                  payload_json: JSON.stringify(thread),
+                  workspaceRoot: repo,
+                }))
+              : strings.join("").includes('AS "worktreePath"')
+                ? [
+                    ...threads.flatMap((thread) => thread.worktreePath ?? []),
+                    ...storedWorktreePaths,
+                  ].map((worktreePath) => ({ worktreePath }))
+                : [],
         )) as unknown as SqlClient.SqlClient),
       Effect.provideService(GitManager.GitManager, {
         invalidateStatus: () => Effect.void,
@@ -414,6 +420,9 @@ const cleanupFixture = (
       },
       setThreads: (next: typeof threads) => {
         threads = next;
+      },
+      setDeletedThreads: (next: OrchestrationV2ThreadShell[]) => {
+        deletedThreads = next;
       },
       setStoredWorktreePaths: (paths: string[]) => {
         storedWorktreePaths = paths;
@@ -845,6 +854,55 @@ describe("subagent worktree ownership", () => {
         expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
       }),
     ),
+  );
+});
+
+describe("deleted thread worktrees", () => {
+  it.effect.each(["no subagents", "native subagent"] as const)(
+    "removes a deleted thread's worktree with %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const fixture = yield* cleanupFixture({
+          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          worktreeAfterDays: null,
+          worktreeOnDelete: true,
+        });
+        const parent = shell({
+          branch: "feature",
+          worktreePath: fixture.worktree,
+          deletedAt: at(-DAY_MS),
+        });
+        fixture.setDeletedThreads([parent]);
+        // Deleting the parent leaves its native subagent thread in the projection.
+        fixture.setThreads(
+          scenario === "native subagent"
+            ? [
+                shell({
+                  id: ThreadId.make("child"),
+                  title: "Subagent",
+                  branch: "feature",
+                  worktreePath: fixture.worktree,
+                  status: "completed",
+                  createdBy: "agent",
+                  creationSource: "provider",
+                  lineage: {
+                    rootThreadId: parent.id,
+                    parentThreadId: parent.id,
+                    relationshipToParent: "subagent",
+                  },
+                }),
+              ]
+            : [],
+        );
+        const report = yield* fixture.service.runNow;
+        expect(report.entries[0]).toMatchObject({
+          threadId: parent.id,
+          outcome: "removed",
+          reason: "Thread was deleted",
+        });
+        expect(yield* fixture.fs.exists(fixture.worktree)).toBe(false);
+      }).pipe(Effect.provide(cleanupTestLayer), Effect.scoped),
   );
 });
 
