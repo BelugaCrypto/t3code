@@ -210,6 +210,11 @@ const ciOnly = Object.entries({
 if (ciOnly.length > 0) summary.push(`  CI also runs: ${ciOnly.join(", ")}`);
 if (!runKnip) summary.push("  knip skipped: no code or manifest changed");
 console.log(`\n${summary.join("\n")}`);
-if (results.some((result) => !result.ok)) process.exit(1);
-NodeFS.mkdirSync(NodePath.dirname(cachePath), { recursive: true });
-NodeFS.writeFileSync(cachePath, JSON.stringify({ key, summary }));
+// exitCode, not exit(): piped stdout is asynchronous on macOS, and exit()
+// would cut off a failing step's output.
+if (results.some((result) => !result.ok)) {
+  process.exitCode = 1;
+} else {
+  NodeFS.mkdirSync(NodePath.dirname(cachePath), { recursive: true });
+  NodeFS.writeFileSync(cachePath, JSON.stringify({ key, summary }));
+}
