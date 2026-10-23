@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   interaction: vi.fn(),
   prepare: vi.fn(),
   checkout: vi.fn(),
+  cachedModelUnavailable: false,
   manager: null as unknown as ReturnType<
     typeof import("./thread-outbox-manager").createThreadOutboxManager
   >,
@@ -82,7 +83,10 @@ vi.mock("./threads", async () => {
 });
 vi.mock("./use-atom-command", () => ({ useAtomCommand: <A>(command: A) => command }));
 vi.mock("./git", () => ({ gitEnvironment: { preparePullRequestThread: state.checkout } }));
-vi.mock("../lib/modelOptions", () => ({ isModelSelectionUnavailable: () => false }));
+vi.mock("../lib/modelOptions", () => ({
+  isModelSelectionUnavailable: () => state.cachedModelUnavailable,
+  describeUnavailableModelSelection: () => ({ title: "Unavailable", detail: "Pick another model" }),
+}));
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "uuid", randomHex: () => "abcd" }));
 vi.mock("../lib/attachmentUpload", () => ({ prepareTurnAttachments: state.prepare }));
 vi.mock("./use-remote-environment-registry", () => ({
@@ -173,6 +177,7 @@ function runDrain() {
 beforeEach(() => {
   state.grantedEnvironments = new Set(["primary"]);
   state.draftText = "Keep this draft separate";
+  state.cachedModelUnavailable = false;
   appAtomRegistry.set(state.manager.queuedMessagesByThreadKeyAtom, {});
   appAtomRegistry.set(dispatchingQueuedMessageIdAtom, null);
   for (const command of [
@@ -293,6 +298,17 @@ describe("queued follow-up model", () => {
 
     expect(state.start).toHaveBeenCalledOnce();
     expect(state.start.mock.calls[0]?.[0].input).not.toHaveProperty("modelSelection");
+  });
+
+  it("delivers a follow-up without a pick even when this client's copy of the thread model looks unavailable", async () => {
+    state.grantedEnvironments.add("secondary");
+    state.cachedModelUnavailable = true;
+    await state.manager.enqueue(message());
+
+    await runDrain();
+
+    expect(state.start).toHaveBeenCalledOnce();
+    expect(remaining()).toEqual([]);
   });
 
   it("delivers the model the user picked with the follow-up", async () => {
