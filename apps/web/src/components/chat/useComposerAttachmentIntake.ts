@@ -258,7 +258,8 @@ export function useComposerAttachmentIntake(input: {
     if (questionAttachmentTarget)
       changeQuestionAttachmentPreparation(questionAttachmentTarget, acceptedImages.length);
     const compressed: { id: string; file: File }[] = [];
-    let compressionError: string | null = null;
+    // Keyed by image so a failure whose tile was removed (even mid-compression) is not reported.
+    const compressionErrors = new Map<string, string>();
     for (const { id, file } of preparingImages) {
       // Removed from the strip while an earlier image was compressing.
       if (!isPreparingComposerImage(attachmentTargetKey, id)) continue;
@@ -269,10 +270,12 @@ export function useComposerAttachmentIntake(input: {
         PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
       ).catch(() => ({ ok: false, reason: "unreadable" }) as const);
       if (!result.ok) {
-        compressionError =
+        compressionErrors.set(
+          id,
           result.reason === "unreadable"
             ? `'${file.name}' could not be read as an image.`
-            : `'${file.name}' is too large to attach, even after compression.`;
+            : `'${file.name}' is too large to attach, even after compression.`,
+        );
         continue;
       }
       inheritComposerImageThumbnail(file, result.file);
@@ -321,7 +324,11 @@ export function useComposerAttachmentIntake(input: {
     // now other work (a failed send, an overlapping paste) may have set a
     // thread error this call knows nothing about, and clearing it would
     // swallow that message.
-    if (compressionError !== null) {
+    const compressionError = [...compressionErrors]
+      .filter(([id]) => stillPreparingIds.has(id))
+      .map(([, message]) => message)
+      .at(-1);
+    if (compressionError !== undefined) {
       setThreadError(threadId, compressionError);
     }
     return insertedAny;
