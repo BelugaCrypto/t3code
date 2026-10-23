@@ -76,8 +76,10 @@ import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import {
   deriveComposerSendState,
   getAntigravitySendBlockReason,
+  getUnchosenProviderSwitchBlockReason,
   readFileAsDataUrl,
   resolveComposerInteractionMode,
+  threadHasStarted,
   threadShellHasStarted,
 } from "../ChatView.logic";
 import {
@@ -987,10 +989,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ? runtimeMode
     : (compatibleRuntimeModeOptions[0]?.mode ?? runtimeMode);
 
-  const providerSendBlockReason = getAntigravitySendBlockReason(
-    selectedProviderEntry?.snapshot,
-    selectedModel,
-  );
+  const providerSendBlockReason =
+    getUnchosenProviderSwitchBlockReason({
+      threadStarted: threadHasStarted(activeThread),
+      threadInstanceId:
+        activeThread?.runtime?.providerInstanceId ?? activeThreadModelSelection?.instanceId,
+      chosenInstanceId: composerDraft.activeProvider,
+      selectedInstanceId: selectedProviderEntry?.instanceId,
+      entries: providerInstanceEntries,
+    }) ?? getAntigravitySendBlockReason(selectedProviderEntry?.snapshot, selectedModel);
   const sendDisabledReason =
     externalSendDisabledReason ??
     (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??

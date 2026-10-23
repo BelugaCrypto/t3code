@@ -633,6 +633,29 @@ export function resolveComposerInteractionMode(input: {
   };
 }
 
+// The composer falls back to another account when a started chat's own one is turned off or
+// missing. Sending that fallback would hand the chat to an account nobody picked.
+export function getUnchosenProviderSwitchBlockReason(input: {
+  threadStarted: boolean;
+  threadInstanceId: ProviderInstanceId | null | undefined;
+  chosenInstanceId: ProviderInstanceId | null | undefined;
+  selectedInstanceId: ProviderInstanceId | null | undefined;
+  entries: ReadonlyArray<Pick<ProviderInstanceEntry, "instanceId" | "displayName" | "enabled">>;
+}): string | null {
+  const { threadInstanceId, selectedInstanceId } = input;
+  if (!input.threadStarted || threadInstanceId == null || selectedInstanceId == null) return null;
+  if (selectedInstanceId === threadInstanceId || selectedInstanceId === input.chosenInstanceId) {
+    return null;
+  }
+  const own = input.entries.find((entry) => entry.instanceId === threadInstanceId);
+  if (own === undefined) {
+    return `This chat's account (${threadInstanceId}) is no longer set up. Add it back in provider settings, or pick a model to move this chat.`;
+  }
+  return own.enabled
+    ? `${own.displayName} is unavailable, so this chat can't continue on it. Check it in provider settings, or pick a model to move this chat.`
+    : `${own.displayName} is turned off, so this chat can't continue on it. Turn it back on in provider settings, or pick a model to move this chat.`;
+}
+
 export function getAntigravitySendBlockReason(
   provider:
     | Pick<ServerProvider, "driver" | "installed" | "auth" | "models" | "status">
