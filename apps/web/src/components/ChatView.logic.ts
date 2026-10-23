@@ -935,18 +935,6 @@ export function shouldShowPlanFollowUpPrompt(input: {
 // bare one ahead of it would run an uninstructed compaction first and charge for two.
 const COMPACT_COMMAND_PATTERN = /^\/compact(?:\s|$)/i;
 
-export function shouldCompactBeforeSend(input: {
-  resumeCompactionTokens: number | null;
-  keepFullHistory: boolean;
-  messageText: string;
-}): boolean {
-  return (
-    input.resumeCompactionTokens !== null &&
-    !input.keepFullHistory &&
-    !COMPACT_COMMAND_PATTERN.test(input.messageText)
-  );
-}
-
 const sessionDismissedBranchMismatchKeys = new Set<string>();
 
 export function dismissBranchMismatchForSession(key: string): void {
@@ -1554,7 +1542,10 @@ export function planComposerTurn(input: {
   // A stale Claude session compacts before this message so the turn does not re-read the
   // old history. The message queues behind the /compact run, since steering into it is
   // rejected.
-  const compactBeforeSend = shouldCompactBeforeSend(input);
+  const compactBeforeSend =
+    input.resumeCompactionTokens !== null &&
+    !input.keepFullHistory &&
+    !COMPACT_COMMAND_PATTERN.test(input.messageText);
   return {
     // In worktree mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
