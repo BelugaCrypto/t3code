@@ -284,6 +284,29 @@ afterEach(() => {
   state.cleanups.splice(0).forEach((cleanup) => cleanup());
 });
 
+describe("queued follow-up model", () => {
+  it("delivers a follow-up queued without a pick with no model, so the server keeps the thread's own", async () => {
+    state.grantedEnvironments.add("secondary");
+    await state.manager.enqueue(message());
+
+    await runDrain();
+
+    expect(state.start).toHaveBeenCalledOnce();
+    expect(state.start.mock.calls[0]?.[0].input).not.toHaveProperty("modelSelection");
+  });
+
+  it("delivers the model the user picked with the follow-up", async () => {
+    state.grantedEnvironments.add("secondary");
+    const picked = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" };
+    await state.manager.enqueue(message({ modelSelection: picked }));
+
+    await runDrain();
+
+    expect(state.start).toHaveBeenCalledOnce();
+    expect(state.start.mock.calls[0]?.[0].input.modelSelection).toEqual(picked);
+  });
+});
+
 describe("queued task operation access", () => {
   it("parks a connected read-only target, then delivers its unchanged queue after a grant", async () => {
     const queued = message();
