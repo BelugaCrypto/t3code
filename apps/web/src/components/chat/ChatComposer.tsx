@@ -98,6 +98,7 @@ import {
   composerFileNeedsReattach,
   composerDraftHasUserContent,
   composerTargetKey,
+  pickedDraftProviderInstanceId,
   useComposerDraftStore,
   useComposerThreadDraft,
 } from "../../composerDraftStore";
@@ -994,7 +995,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       threadStarted: threadHasStarted(activeThread),
       threadInstanceId:
         activeThread?.runtime?.providerInstanceId ?? activeThreadModelSelection?.instanceId,
-      chosenInstanceId: composerDraft.activeProvider,
+      chosenInstanceId: pickedDraftProviderInstanceId(composerDraft),
       selectedInstanceId: selectedProviderEntry?.instanceId,
       entries: providerInstanceEntries,
     }) ?? getAntigravitySendBlockReason(selectedProviderEntry?.snapshot, selectedModel);

@@ -85,9 +85,11 @@ import {
   type ComposerImageAttachment,
   composerFileNeedsReattach,
   partializeComposerDraftStoreState,
+  pickedDraftProviderInstanceId,
   useComposerDraftStore,
   DraftId,
 } from "./composerDraftStore";
+import { getUnchosenProviderSwitchBlockReason } from "./components/ChatView.logic";
 import { insertInlineContextReference } from "./lib/composerContextReferences";
 import { terminalContextReference, threadContextRecord } from "./lib/composerContextRecords";
 import {
@@ -1320,6 +1322,7 @@ describe("composerDraftStore modelSelection", () => {
       activeProvider: null,
       modelSelectionByProvider: {},
       modelSelectionExplicit: undefined,
+      providerPicked: undefined,
     });
     expect(draftFor(threadId, OTHER_TEST_ENVIRONMENT_ID)).toEqual(remoteBefore);
 
@@ -1534,6 +1537,91 @@ describe("composerDraftStore modelSelection", () => {
         options: [{ id: "reasoningEffort", value: "low" }],
       }),
     );
+  });
+
+  it("keeps blocking a silent account move after an effort change on the fallback account", () => {
+    const store = useComposerDraftStore.getState();
+    // The chat runs on the secondary account, which is turned off; the composer shows the primary.
+    const entries = [
+      { instanceId: CODEX_SECONDARY_INSTANCE, displayName: "Codex - work", enabled: false },
+      { instanceId: CODEX_INSTANCE, displayName: "Codex", enabled: true },
+    ];
+    const blockReason = () =>
+      getUnchosenProviderSwitchBlockReason({
+        threadStarted: true,
+        threadInstanceId: CODEX_SECONDARY_INSTANCE,
+        chosenInstanceId: pickedDraftProviderInstanceId(draftFor(threadId, TEST_ENVIRONMENT_ID)),
+        selectedInstanceId: CODEX_INSTANCE,
+        entries,
+      });
+
+    store.setProviderModelOptions(
+      threadRef,
+      CODEX_DRIVER,
+      toSelections({ reasoningEffort: "low" }),
+      { instanceId: CODEX_INSTANCE, model: "gpt-5.4" },
+    );
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.activeProvider).toBe(CODEX_INSTANCE);
+    expect(blockReason()).toBe(
+      "Codex - work is turned off, so this chat can't continue on it. Turn it back on in provider settings, or pick a model to move this chat.",
+    );
+
+    store.setModelSelection(threadRef, createModelSelection(CODEX_INSTANCE, "gpt-5.4"), {
+      explicit: true,
+    });
+    expect(blockReason()).toBeNull();
+  });
+
+  it("counts a model-picker pick even when an effort change already stored that model", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProviderModelOptions(
+      threadRef,
+      CODEX_DRIVER,
+      toSelections({ reasoningEffort: "low" }),
+      { instanceId: CODEX_SECONDARY_INSTANCE, model: "gpt-5-codex" },
+    );
+
+    store.setModelSelection(
+      threadRef,
+      createModelSelection(
+        CODEX_SECONDARY_INSTANCE,
+        "gpt-5-codex",
+        toSelections({ reasoningEffort: "low" }),
+      ),
+      { explicit: true, replaceOptions: true },
+    );
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.providerPicked).toBe(true);
+  });
+
+  it("keeps a pick through effort changes on that account and drops it for another account", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(
+      threadRef,
+      createModelSelection(CODEX_SECONDARY_INSTANCE, "gpt-5-codex"),
+      {
+        explicit: true,
+        replaceOptions: true,
+      },
+    );
+
+    store.setProviderModelOptions(
+      threadRef,
+      CODEX_DRIVER,
+      toSelections({ reasoningEffort: "high" }),
+      { instanceId: CODEX_SECONDARY_INSTANCE, model: "gpt-5-codex" },
+    );
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.providerPicked).toBe(true);
+
+    store.setProviderModelOptions(
+      threadRef,
+      CODEX_DRIVER,
+      toSelections({ reasoningEffort: "high" }),
+      { instanceId: CODEX_INSTANCE, model: "gpt-5.4" },
+    );
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.activeProvider).toBe(CODEX_INSTANCE);
+    expect(draft?.providerPicked).toBeUndefined();
   });
 });
 
