@@ -40,13 +40,28 @@ export function addPreparingComposerImages(
   }));
 }
 
+export function isPreparingComposerImage(targetKey: string, imageId: string): boolean {
+  return (
+    usePreparingComposerImageStore
+      .getState()
+      .byTargetKey[targetKey]?.some((image) => image.id === imageId) ?? false
+  );
+}
+
+/** Returns the ids that were still preparing; any other id was cancelled from the strip. */
 export function removePreparingComposerImages(
   targetKey: string,
   imageIds: ReadonlySet<string>,
-): void {
+): ReadonlySet<string> {
+  const current =
+    usePreparingComposerImageStore.getState().byTargetKey[targetKey] ?? NO_PREPARING_IMAGES;
+  const removed = new Set(
+    current.filter((image) => imageIds.has(image.id)).map((image) => image.id),
+  );
+  if (removed.size === 0) return removed;
   usePreparingComposerImageStore.setState((state) => {
     const remaining = (state.byTargetKey[targetKey] ?? NO_PREPARING_IMAGES).filter(
-      (image) => !imageIds.has(image.id),
+      (image) => !removed.has(image.id),
     );
     const byTargetKey = { ...state.byTargetKey };
     if (remaining.length > 0) {
@@ -56,4 +71,5 @@ export function removePreparingComposerImages(
     }
     return { byTargetKey };
   });
+  return removed;
 }

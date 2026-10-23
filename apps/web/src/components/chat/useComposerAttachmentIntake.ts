@@ -48,6 +48,7 @@ import { type RefObject, useRef } from "react";
 import { videoMimeType } from "../../types";
 import {
   addPreparingComposerImages,
+  isPreparingComposerImage,
   removePreparingComposerImages,
 } from "./preparingComposerImages";
 
@@ -256,53 +257,50 @@ export function useComposerAttachmentIntake(input: {
     addPreparingComposerImages(attachmentTargetKey, preparingImages);
     if (questionAttachmentTarget)
       changeQuestionAttachmentPreparation(questionAttachmentTarget, acceptedImages.length);
-    const compressImages = async () => {
-      const nextImages: ComposerImageAttachment[] = [];
-      let compressionError: string | null = null;
-      for (const { id, file } of preparingImages) {
-        // A rejection must still reach the cleanup below: a leaked
-        // placeholder would block sending from this draft for good.
-        const compressed = await prepareImageForAttachment(
-          file,
-          PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-        ).catch(() => ({ ok: false, reason: "unreadable" }) as const);
-        if (!compressed.ok) {
-          compressionError =
-            compressed.reason === "unreadable"
-              ? `'${file.name}' could not be read as an image.`
-              : `'${file.name}' is too large to attach, even after compression.`;
-          continue;
-        }
-        const attachmentFile = compressed.file;
-        inheritComposerImageThumbnail(file, attachmentFile);
-        nextImages.push({
-          type: "image",
-          id,
-          name: attachmentFile.name || "image",
-          mimeType: attachmentFile.type,
-          sizeBytes: attachmentFile.size,
-          previewUrl: URL.createObjectURL(attachmentFile),
-          file: attachmentFile,
-        });
+    const compressed: { id: string; file: File }[] = [];
+    let compressionError: string | null = null;
+    for (const { id, file } of preparingImages) {
+      // Removed from the strip while an earlier image was compressing.
+      if (!isPreparingComposerImage(attachmentTargetKey, id)) continue;
+      // A rejection must still reach the cleanup below: a leaked
+      // placeholder would block sending from this draft for good.
+      const result = await prepareImageForAttachment(
+        file,
+        PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+      ).catch(() => ({ ok: false, reason: "unreadable" }) as const);
+      if (!result.ok) {
+        compressionError =
+          result.reason === "unreadable"
+            ? `'${file.name}' could not be read as an image.`
+            : `'${file.name}' is too large to attach, even after compression.`;
+        continue;
       }
-      return { nextImages, compressionError };
-    };
-    const { nextImages, compressionError } = await compressImages();
+      inheritComposerImageThumbnail(file, result.file);
+      compressed.push({ id, file: result.file });
+    }
     const questionDiscarded =
       questionAttachmentTarget !== null &&
       !useQuestionAttachmentPreparation.getState().counts[questionAttachmentTarget];
     // Same tick as the draft insert below, so the strip swaps placeholders for
-    // real tiles in one render.
-    if (questionAttachmentTarget)
-      changeQuestionAttachmentPreparation(questionAttachmentTarget, -acceptedImages.length);
-    removePreparingComposerImages(
+    // real tiles in one render. A placeholder removed meanwhile stays removed.
+    const stillPreparingIds = removePreparingComposerImages(
       attachmentTargetKey,
       new Set(preparingImages.map((image) => image.id)),
     );
-    if (questionDiscarded) {
-      for (const image of nextImages) URL.revokeObjectURL(image.previewUrl);
-      return false;
-    }
+    if (questionAttachmentTarget)
+      changeQuestionAttachmentPreparation(questionAttachmentTarget, -stillPreparingIds.size);
+    if (questionDiscarded) return false;
+    const nextImages: ComposerImageAttachment[] = compressed
+      .filter(({ id }) => stillPreparingIds.has(id))
+      .map(({ id, file }) => ({
+        type: "image",
+        id,
+        name: file.name || "image",
+        mimeType: file.type,
+        sizeBytes: file.size,
+        previewUrl: URL.createObjectURL(file),
+        file,
+      }));
     const storedImageIds = new Set(
       nextImages.length === 1 && nextImages[0]
         ? addComposerImage(nextImages[0])
@@ -311,6 +309,10 @@ export function useComposerAttachmentIntake(input: {
           : [],
     );
     const storedImages = nextImages.filter((image) => storedImageIds.has(image.id));
+    // The draft may be gone by now; revoking a URL the store already revoked is harmless.
+    for (const image of nextImages) {
+      if (!storedImageIds.has(image.id)) URL.revokeObjectURL(image.previewUrl);
+    }
     if (storedImages.length > 0 && imageAttachmentsGetChips) {
       insertedAny =
         insertAttachmentReferences(storedImages.map(imageContextReference)) || insertedAny;
@@ -326,6 +328,12 @@ export function useComposerAttachmentIntake(input: {
   };
 
   const removeComposerImage = (imageId: string) => {
+    if (removePreparingComposerImages(attachmentTargetKey, new Set([imageId])).size > 0) {
+      // Its compression finishes in the background and is dropped.
+      if (questionAttachmentTarget)
+        changeQuestionAttachmentPreparation(questionAttachmentTarget, -1);
+      return;
+    }
     const image = composerImagesRef.current.find((candidate) => candidate.id === imageId);
     const referenced = collectInlineContextIds(promptRef.current).includes(
       image ? imageContextReference(image).contextId : "",
