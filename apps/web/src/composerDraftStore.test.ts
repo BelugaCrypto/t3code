@@ -1543,8 +1543,13 @@ describe("composerDraftStore modelSelection", () => {
     const store = useComposerDraftStore.getState();
     // The chat runs on the secondary account, which is turned off; the composer shows the primary.
     const entries = [
-      { instanceId: CODEX_SECONDARY_INSTANCE, displayName: "Codex - work", enabled: false },
-      { instanceId: CODEX_INSTANCE, displayName: "Codex", enabled: true },
+      {
+        instanceId: CODEX_SECONDARY_INSTANCE,
+        displayName: "Codex - work",
+        enabled: false,
+        isAvailable: true,
+      },
+      { instanceId: CODEX_INSTANCE, displayName: "Codex", enabled: true, isAvailable: true },
     ];
     const blockReason = () =>
       getUnchosenProviderSwitchBlockReason({

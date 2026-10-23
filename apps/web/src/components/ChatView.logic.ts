@@ -640,7 +640,9 @@ export function getUnchosenProviderSwitchBlockReason(input: {
   threadInstanceId: ProviderInstanceId | null | undefined;
   chosenInstanceId: ProviderInstanceId | null | undefined;
   selectedInstanceId: ProviderInstanceId | null | undefined;
-  entries: ReadonlyArray<Pick<ProviderInstanceEntry, "instanceId" | "displayName" | "enabled">>;
+  entries: ReadonlyArray<
+    Pick<ProviderInstanceEntry, "instanceId" | "displayName" | "enabled" | "isAvailable">
+  >;
 }): string | null {
   const { threadInstanceId, selectedInstanceId } = input;
   if (!input.threadStarted || threadInstanceId == null || selectedInstanceId == null) return null;
@@ -651,9 +653,13 @@ export function getUnchosenProviderSwitchBlockReason(input: {
   if (own === undefined) {
     return `This chat's account (${threadInstanceId}) is no longer set up. Add it back in provider settings, or pick a model to move this chat.`;
   }
-  return own.enabled
-    ? `${own.displayName} is unavailable, so this chat can't continue on it. Check it in provider settings, or pick a model to move this chat.`
-    : `${own.displayName} is turned off, so this chat can't continue on it. Turn it back on in provider settings, or pick a model to move this chat.`;
+  if (!own.enabled) {
+    return `${own.displayName} is turned off, so this chat can't continue on it. Turn it back on in provider settings, or pick a model to move this chat.`;
+  }
+  // An option edit made while the chat's account was off still points the composer elsewhere.
+  return own.isAvailable
+    ? `Pick ${own.displayName} in the model menu to keep this chat on it, or pick another model to move this chat.`
+    : `${own.displayName} is unavailable, so this chat can't continue on it. Check it in provider settings, or pick a model to move this chat.`;
 }
 
 export function getAntigravitySendBlockReason(

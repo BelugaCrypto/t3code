@@ -715,6 +715,20 @@ describe("resolveComposerProviderSelection", () => {
       expect(result.blockReason).toBeNull();
     });
 
+    it("asks for a pick when the chat's account is back on but the composer still points elsewhere", () => {
+      const reason = getUnchosenProviderSwitchBlockReason({
+        threadStarted: true,
+        threadInstanceId: work.instanceId,
+        chosenInstanceId: null,
+        selectedInstanceId: other.instanceId,
+        entries: [work, other],
+      });
+
+      expect(reason).toBe(
+        "Pick Claude - work in the model menu to keep this chat on it, or pick another model to move this chat.",
+      );
+    });
+
     it("lets a chat that has not started yet use whichever account is available", () => {
       const result = attempt({ entries: [other], threadStarted: false });
 
