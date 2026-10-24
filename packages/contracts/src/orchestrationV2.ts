@@ -1897,6 +1897,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   latestRunStopRequested: Schema.optional(Schema.Boolean),
   /** Suppress routine notifications for idle compaction; failures still notify. */
   latestRunSilent: Schema.optional(Schema.Boolean),
+  // Held runs count: a run still waiting to start has not applied its model to the thread.
+  hasQueuedRuns: Schema.optional(Schema.Boolean),
   activeRunId: Schema.NullOr(RunId),
   activityRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   activityRunStatus: Schema.optional(

@@ -73,6 +73,7 @@ import {
   flushComposerDrafts,
   type ComposerDraft,
   getComposerDraftSnapshot,
+  markComposerDraftModelSelectionDelivered,
   mergeComposerDraftContent,
   replaceComposerDraftAttachments,
   removeDeliveredCloudQueuedMessage,
@@ -890,6 +891,19 @@ export function useThreadOutboxDrain(): void {
         return restoreQueuedMessage(persistedMessage, failure.message);
       }
       acknowledgedExistingThreadMessageIdsRef.current.add(persistedMessage.messageId);
+      // A retried command returns its original receipt, so the sequence names this dispatch.
+      const delivery = AsyncResult.isSuccess(deliveryResult) ? deliveryResult.value : undefined;
+      const deliveredSequence =
+        typeof delivery === "object" && delivery !== null && "sequence" in delivery
+          ? delivery.sequence
+          : undefined;
+      if (picked && deliveredSequence !== undefined) {
+        markComposerDraftModelSelectionDelivered(
+          scopedThreadKey(queuedMessage.environmentId, queuedMessage.threadId),
+          sendSettings.modelSelection,
+          deliveredSequence,
+        );
+      }
       const delivered =
         (await completeQueuedMessageDelivery(persistedMessage, deliveryRevision)) === "removed";
       if (delivered) {

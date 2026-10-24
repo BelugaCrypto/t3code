@@ -1087,6 +1087,7 @@ type ShellThreadRow = {
   readonly latest_run_completed_at: string | null;
   readonly latest_run_stop_requested: number;
   readonly latest_run_silent: number;
+  readonly has_queued_runs: number;
   readonly active_run_id: string | null;
   readonly active_run_status: string | null;
   readonly activity_run_status: string | null;
@@ -1647,6 +1648,7 @@ export function threadShellFromProjection(
         (item) =>
           item.runId === latestRun.id && item.type === "compaction" && item.status === "failed",
       ),
+    hasQueuedRuns: projection.runs.some((run) => run.status === "queued"),
     activeRunId: activeRun?.id ?? null,
     blockedOnThreadWait: deriveBlockedOnThreadWait({ activeRun, turnItems: projection.turnItems }),
     activityRunStatus: activityRun?.status ?? null,
@@ -1749,6 +1751,7 @@ type ShellThreadState = {
   readonly latestRunCompletedAt: DateTime.Utc | null;
   readonly latestRunStopRequested: boolean;
   readonly latestRunSilent: boolean;
+  readonly hasQueuedRuns: boolean;
   readonly activeRunId: RunId | null;
   readonly blockedOnThreadWait: boolean;
   readonly activityRunStatus: ShellActivityRunStatus | null;
@@ -1905,6 +1908,7 @@ function shellFromState(input: {
     latestRunCompletedAt: input.state.latestRunCompletedAt,
     latestRunStopRequested: input.state.latestRunStopRequested,
     latestRunSilent: input.state.latestRunSilent,
+    hasQueuedRuns: input.state.hasQueuedRuns,
     activeRunId: input.state.activeRunId,
     blockedOnThreadWait: input.state.blockedOnThreadWait,
     activityRunStatus: input.state.activityRunStatus,
@@ -5725,6 +5729,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND compaction.type = 'compaction'
                   AND compaction.status = 'failed'
               ) AS latest_run_silent,
+              EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runs queued
+                WHERE queued.thread_id = t.thread_id AND queued.status = 'queued'
+              ) AS has_queued_runs,
               active.run_id AS active_run_id,
               active.status AS active_run_status,
               (
@@ -6315,6 +6323,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           latestRunCompletedAt,
           latestRunStopRequested,
           latestRunSilent,
+          hasQueuedRuns: row.has_queued_runs === 1,
           activeRunId: row.active_run_id === null ? null : RunId.make(row.active_run_id),
           blockedOnThreadWait: deriveBlockedOnThreadWait({
             activeRun:
