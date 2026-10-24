@@ -107,6 +107,7 @@ import {
 } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
+import { environmentShell } from "./shell";
 import { dispatchingQueuedMessageIdAtom, useThreadOutboxMessages } from "./use-thread-outbox";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
@@ -592,8 +593,14 @@ export function useThreadComposerState() {
 
     const modelSelection = draft.modelSelection ?? thread.modelSelection;
     const serverConfig = selectedEnvironmentRuntime?.serverConfig;
+    // Until the shell is live again after a reconnect, the cached thread can still name a model it
+    // no longer uses. Without a pick the server delivers on the thread's own model and checks it.
+    const modelKnown =
+      draft.modelSelection !== undefined ||
+      appAtomRegistry.get(environmentShell.stateValueAtom(thread.environmentId)).status === "live";
     if (
       selectedEnvironmentRuntime?.connectionState === "connected" &&
+      modelKnown &&
       isModelSelectionUnavailable(serverConfig, modelSelection, thread.projectId)
     ) {
       const { title, detail } = describeUnavailableModelSelection(

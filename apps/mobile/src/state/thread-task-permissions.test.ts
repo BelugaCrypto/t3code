@@ -25,6 +25,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   grantedEnvironments: new Set<string>(),
   connectionState: "connected",
+  shellStatus: "live",
   draft: {
     text: "Keep my draft",
     attachments: [] as DraftComposerImageAttachment[],
@@ -126,6 +127,14 @@ vi.mock("./use-thread-outbox", async () => {
   return { dispatchingQueuedMessageIdAtom: Atom.make(null), useThreadOutboxMessages: () => ({}) };
 });
 vi.mock("./thread-outbox", () => ({ enqueueThreadOutboxMessage: state.enqueue }));
+vi.mock("./shell", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    environmentShell: {
+      stateValueAtom: () => Atom.make(() => ({ status: state.shellStatus })),
+    },
+  };
+});
 vi.mock("./composer-attachment-uploads", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
@@ -173,12 +182,14 @@ vi.mock("../lib/commandMetadata", () => ({
 vi.mock("../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: vi.fn() }));
 vi.mock("./use-remote-environment-registry", () => ({ setPendingConnectionError: vi.fn() }));
 
+import { Alert } from "react-native";
 import { useThreadComposerState } from "./use-thread-composer-state";
 import { useSelectedThreadRequests } from "./use-selected-thread-requests";
 
 beforeEach(() => {
   state.grantedEnvironments = new Set(["primary"]);
   state.connectionState = "connected";
+  state.shellStatus = "live";
   state.draft = { text: "Keep my draft", attachments: [], modelSelection: undefined };
   state.projection = null;
   state.serverConfig = {
@@ -329,6 +340,57 @@ describe("queued follow-up model", () => {
     expect(state.enqueue).toHaveBeenCalledOnce();
     const [queued] = state.enqueue.mock.calls[0] as unknown as [object];
     expect(queued).not.toHaveProperty("modelSelection");
+  });
+
+  it("queues a follow-up with no pick while the thread list is still synchronizing, even if its cached model looks unavailable", async () => {
+    state.grantedEnvironments.add("secondary");
+    state.shellStatus = "synchronizing";
+    state.serverConfig = {
+      providers: [{ instanceId: "codex", driver: "codex", enabled: false }],
+      environment: { capabilities: {} },
+    } as unknown as ServerConfig;
+    const composer = useThreadComposerState();
+
+    expect(await composer.onSendMessage()).toBe("message");
+
+    expect(Alert.alert).not.toHaveBeenCalled();
+    expect(state.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("still warns about the thread's own unavailable model once the thread list is live", async () => {
+    state.grantedEnvironments.add("secondary");
+    state.serverConfig = {
+      providers: [{ instanceId: "codex", driver: "codex", enabled: false }],
+      environment: { capabilities: {} },
+    } as unknown as ServerConfig;
+    const composer = useThreadComposerState();
+
+    expect(await composer.onSendMessage()).toBeNull();
+
+    expect(Alert.alert).toHaveBeenCalledOnce();
+    expect(state.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("still warns about an unavailable pick while the thread list is synchronizing", async () => {
+    state.grantedEnvironments.add("secondary");
+    state.shellStatus = "synchronizing";
+    state.serverConfig = {
+      providers: [
+        { instanceId: "codex", driver: "codex", enabled: true },
+        { instanceId: "claudeAgent", driver: "claudeAgent", enabled: false },
+      ],
+      environment: { capabilities: {} },
+    } as unknown as ServerConfig;
+    state.draft.modelSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-opus-5-5",
+    };
+    const composer = useThreadComposerState();
+
+    expect(await composer.onSendMessage()).toBeNull();
+
+    expect(Alert.alert).toHaveBeenCalledOnce();
+    expect(state.enqueue).not.toHaveBeenCalled();
   });
 });
 
