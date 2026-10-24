@@ -14,6 +14,7 @@ import {
   RuntimeMode as RuntimeModeSchema,
   type EnvironmentId,
   type ModelSelection,
+  type OrchestrationV2ThreadShell,
   type ProjectId,
   type ProviderInteractionMode,
   type ProviderOptionSelection,
@@ -64,6 +65,7 @@ import {
   encodeQueuedThreadMessage,
   QueuedThreadMessageSchema,
   type QueuedThreadMessage,
+  modelSelectionsEqual,
 } from "./thread-outbox-model";
 import { flushThreadOutbox, threadOutboxManager } from "./thread-outbox";
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
@@ -337,10 +339,22 @@ export interface ComposerDraft {
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly importedShareIds?: ReadonlyArray<string>;
   readonly modelSelection?: ModelSelection;
+  /**
+   * Set once a message carrying `modelSelection` was accepted, with the event sequence the server
+   * returned for it. Once the shell has passed that sequence and its latest run has started, the
+   * server applied the pick (or a later choice), so the pick is released even when this client
+   * never saw the thread on it.
+   */
+  readonly modelSelectionDelivery?: ComposerDraftModelSelectionDelivery;
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
   readonly project?: ComposerDraftProject;
+}
+
+export interface ComposerDraftModelSelectionDelivery {
+  readonly modelSelection: ModelSelection;
+  readonly sequence: number;
 }
 
 export interface ComposerDraftProject {
@@ -396,6 +410,12 @@ const ComposerDraftSchema = Schema.Struct({
   attachments: Schema.Array(DraftComposerAttachmentSchema),
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
   modelSelection: Schema.optional(ModelSelectionSchema),
+  modelSelectionDelivery: Schema.optional(
+    Schema.Struct({
+      modelSelection: ModelSelectionSchema,
+      sequence: Schema.Number,
+    }),
+  ),
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
@@ -1460,12 +1480,57 @@ export function updateComposerDraftSettings(
   settings: Partial<ComposerDraftSettingsUpdate>,
 ): void {
   updateComposerDrafts((current) => {
+    const { modelSelectionDelivery, ...existing } = normalizeDraft(current[draftKey]);
     const draft = {
-      ...normalizeDraft(current[draftKey]),
+      ...existing,
+      ...(settings.modelSelection === undefined && modelSelectionDelivery !== undefined
+        ? { modelSelectionDelivery }
+        : {}),
       ...settings,
     };
     return withComposerDraft(current, draftKey, draft);
   });
+}
+
+export function markComposerDraftModelSelectionDelivered(
+  draftKey: string,
+  delivered: ModelSelection,
+  sequence: number,
+): void {
+  updateComposerDrafts((current) => {
+    const existing = current[draftKey];
+    if (!existing?.modelSelection || !modelSelectionsEqual(existing.modelSelection, delivered)) {
+      return current;
+    }
+    return withComposerDraft(current, draftKey, {
+      ...existing,
+      modelSelectionDelivery: { modelSelection: delivered, sequence },
+    });
+  });
+}
+
+function isCurrentDelivery(draft: ComposerDraft): boolean {
+  const delivery = draft.modelSelectionDelivery;
+  return (
+    delivery !== undefined &&
+    draft.modelSelection !== undefined &&
+    modelSelectionsEqual(delivery.modelSelection, draft.modelSelection)
+  );
+}
+
+// Once the shell includes the delivery and no run waits to start, the picked run has started (the
+// server applied the pick, then maybe a later choice) or was removed. A server that does not report
+// queued runs never releases a delivered pick this way.
+function deliveredPickWasApplied(
+  draft: ComposerDraft,
+  snapshotSequence: number,
+  thread: Pick<OrchestrationV2ThreadShell, "hasQueuedRuns">,
+): boolean {
+  return (
+    isCurrentDelivery(draft) &&
+    snapshotSequence >= draft.modelSelectionDelivery!.sequence &&
+    thread.hasQueuedRuns === false
+  );
 }
 
 export function subscribeComposerDraftModelReconciliation(input: {
@@ -1492,19 +1557,26 @@ export function subscribeComposerDraftModelReconciliation(input: {
       const ref = parseScopedThreadKey(key);
       if (!ref || !threadKeys.has(key)) continue;
       const thread = get(input.threadShellAtom(ref));
-      if (!thread || !draftModelPickMatchesThread(draft.modelSelection, thread.modelSelection))
+      if (
+        !thread ||
+        (!draftModelPickMatchesThread(draft.modelSelection, thread.modelSelection) &&
+          !isCurrentDelivery(draft))
+      )
         continue;
       // Status and selection must come from the same emission; derived atoms can update apart.
       const shell = Option.getOrNull(
         AsyncResult.value(get(input.shellStateAtom(ref.environmentId))),
       );
       if (shell?.status !== "live") continue;
-      const authoritativeThread = Option.getOrNull(shell.snapshot)?.threads.find(
+      const snapshot = Option.getOrNull(shell.snapshot);
+      const authoritativeShell = snapshot?.threads.find(
         (candidate) => candidate.id === ref.threadId,
       );
       if (
-        authoritativeThread &&
-        draftModelPickMatchesThread(draft.modelSelection, authoritativeThread.modelSelection)
+        snapshot &&
+        authoritativeShell &&
+        (draftModelPickMatchesThread(draft.modelSelection, authoritativeShell.modelSelection) ||
+          deliveredPickWasApplied(draft, snapshot.snapshotSequence, authoritativeShell))
       ) {
         matches.push([key, draft]);
       }
@@ -1519,7 +1591,11 @@ export function subscribeComposerDraftModelReconciliation(input: {
         let next = current;
         for (const [key, matchedDraft] of matches) {
           if (next[key] !== matchedDraft) continue;
-          const { modelSelection: _modelSelection, ...draft } = matchedDraft;
+          const {
+            modelSelection: _modelSelection,
+            modelSelectionDelivery: _modelSelectionDelivery,
+            ...draft
+          } = matchedDraft;
           next = withComposerDraft(next, key, draft);
         }
         return next;
@@ -1549,6 +1625,7 @@ export function clearComposerDraftContentState(
     importedShareIds: _importedShareIds,
     context: _context,
     modelSelection,
+    modelSelectionDelivery,
     workspaceSelection,
     project: _project,
     ...retained
@@ -1556,6 +1633,9 @@ export function clearComposerDraftContentState(
   const draft = {
     ...retained,
     ...(options?.clearModelSelection || modelSelection === undefined ? {} : { modelSelection }),
+    ...(options?.clearModelSelection || modelSelectionDelivery === undefined
+      ? {}
+      : { modelSelectionDelivery }),
     ...(options?.clearWorkspaceSelection || workspaceSelection === undefined
       ? {}
       : { workspaceSelection }),

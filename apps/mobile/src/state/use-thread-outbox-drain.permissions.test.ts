@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   interaction: vi.fn(),
   prepare: vi.fn(),
   checkout: vi.fn(),
+  markDelivered: vi.fn(),
   cachedModelUnavailable: false,
   manager: null as unknown as ReturnType<
     typeof import("./thread-outbox-manager").createThreadOutboxManager
@@ -138,6 +139,7 @@ vi.mock("./use-composer-drafts", async () => {
     appendComposerDraftAttachments: vi.fn(),
     flushComposerDrafts: vi.fn(),
     getComposerDraftSnapshot: vi.fn(() => ({ text: state.draftText, attachments: [] })),
+    markComposerDraftModelSelectionDelivered: state.markDelivered,
     mergeComposerDraftContent: vi.fn(async (_key: string, input: { text: string }) => {
       state.draftText += `\n${input.text}`;
     }),
@@ -178,6 +180,7 @@ beforeEach(() => {
   state.grantedEnvironments = new Set(["primary"]);
   state.draftText = "Keep this draft separate";
   state.cachedModelUnavailable = false;
+  state.markDelivered.mockReset();
   appAtomRegistry.set(state.manager.queuedMessagesByThreadKeyAtom, {});
   appAtomRegistry.set(dispatchingQueuedMessageIdAtom, null);
   for (const command of [
@@ -315,11 +318,14 @@ describe("queued follow-up model", () => {
     state.grantedEnvironments.add("secondary");
     const picked = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" };
     await state.manager.enqueue(message({ modelSelection: picked }));
+    state.start.mockResolvedValueOnce(AsyncResult.success({ sequence: 42 }));
 
     await runDrain();
 
     expect(state.start).toHaveBeenCalledOnce();
     expect(state.start.mock.calls[0]?.[0].input.modelSelection).toEqual(picked);
+    // The draft keeps the pick until a later run shows the server applied it.
+    expect(state.markDelivered).toHaveBeenCalledExactlyOnceWith("secondary:thread", picked, 42);
   });
 });
 
