@@ -371,6 +371,9 @@ export interface ComposerThreadDraftState {
   modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
   activeProvider: ProviderInstanceId | null;
   modelSelectionExplicit?: boolean;
+  // Set only when the user picks `activeProvider` in the model picker; option edits also set
+  // `activeProvider`, and must not count as choosing to move a started thread. Never persisted.
+  providerPicked?: true;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
 }
@@ -2848,11 +2851,16 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             if (
               Equal.equals(base.modelSelectionByProvider, nextMap) &&
               base.activeProvider === stickyActiveProvider &&
-              base.modelSelectionExplicit === undefined
+              base.modelSelectionExplicit === undefined &&
+              base.providerPicked === undefined
             ) {
               return state;
             }
-            const { modelSelectionExplicit: _modelSelectionExplicit, ...retained } = base;
+            const {
+              modelSelectionExplicit: _modelSelectionExplicit,
+              providerPicked: _providerPicked,
+              ...retained
+            } = base;
             const nextDraft: ComposerThreadDraftState = {
               ...retained,
               modelSelectionByProvider: nextMap,
@@ -2951,16 +2959,23 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             if (
               Equal.equals(base.modelSelectionByProvider, nextMap) &&
               base.activeProvider === nextActiveProvider &&
-              (base.modelSelectionExplicit ?? false) === (opts?.explicit === true)
+              (base.modelSelectionExplicit ?? false) === (opts?.explicit === true) &&
+              (base.providerPicked ?? false) === (opts?.explicit === true)
             ) {
               return state;
             }
-            const { modelSelectionExplicit: _previousExplicit, ...restBase } = base;
+            const {
+              modelSelectionExplicit: _previousExplicit,
+              providerPicked: _previousPicked,
+              ...restBase
+            } = base;
             const nextDraft: ComposerThreadDraftState = {
               ...restBase,
               modelSelectionByProvider: nextMap,
               activeProvider: nextActiveProvider,
-              ...(opts?.explicit === true ? { modelSelectionExplicit: true as const } : {}),
+              ...(opts?.explicit === true
+                ? { modelSelectionExplicit: true as const, providerPicked: true as const }
+                : {}),
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
@@ -3100,12 +3115,16 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               return state;
             }
 
-            const { modelSelectionExplicit: _previousExplicit, ...restBase } = base;
+            const { modelSelectionExplicit: _previousExplicit, providerPicked, ...restBase } = base;
+            const nextActiveProvider = options?.instanceId ? instanceKey : base.activeProvider;
             const nextDraft: ComposerThreadDraftState = {
               ...restBase,
-              ...(options?.instanceId ? { activeProvider: instanceKey } : {}),
+              activeProvider: nextActiveProvider,
               modelSelectionByProvider: nextMap,
               modelSelectionExplicit: true,
+              ...(providerPicked && nextActiveProvider === base.activeProvider
+                ? { providerPicked }
+                : {}),
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
@@ -4202,7 +4221,11 @@ export function subscribeComposerDraftModelReconciliation(input: {
         const drafts = { ...state.draftsByThreadKey };
         for (const [key, matchedDraft] of matches) {
           if (drafts[key] !== matchedDraft) continue;
-          const { modelSelectionExplicit: _explicit, ...retained } = matchedDraft;
+          const {
+            modelSelectionExplicit: _explicit,
+            providerPicked: _picked,
+            ...retained
+          } = matchedDraft;
           const draft = { ...retained, activeProvider: null, modelSelectionByProvider: {} };
           if (shouldRemoveDraft(draft)) delete drafts[key];
           else drafts[key] = draft;
@@ -4319,6 +4342,13 @@ export function useThreadHasUnsentDraft(threadRef: ScopedThreadRef): boolean {
   return useComposerDraftStore((state) =>
     composerDraftHasUserContent(getComposerDraftState(state, threadRef)),
   );
+}
+
+// The account the user picked in the model picker, or null when nothing was picked there.
+export function pickedDraftProviderInstanceId(
+  draft: Pick<ComposerThreadDraftState, "activeProvider" | "providerPicked"> | null | undefined,
+): ProviderInstanceId | null {
+  return draft?.providerPicked ? draft.activeProvider : null;
 }
 
 export function useComposerDraftModelState(

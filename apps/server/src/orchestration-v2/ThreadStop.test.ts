@@ -876,6 +876,50 @@ it.effect.each([false, true])(
     }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("the thread shell says whether a run still waits to start, held runs included", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("thread:shell-queued-runs");
+    const shells = Effect.gen(function* () {
+      const snapshot = (yield* projections.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      const memoryShell = ProjectionStore.threadShellFromProjection(
+        yield* orchestrator.getThreadProjection(threadId),
+      );
+      return [yield* projections.getThreadShell(threadId), snapshot, memoryShell].map(
+        (shell) => shell?.hasQueuedRuns,
+      );
+    });
+    yield* createWatchingThread(threadId, 9);
+    yield* send(threadId, "active", "start_immediately");
+    assert.deepEqual(yield* shells, [false, false, false]);
+
+    yield* send(threadId, "queued", "queue_after_active");
+    assert.deepEqual(yield* shells, [true, true, true]);
+
+    yield* orchestrator.dispatch({
+      type: "thread.stop",
+      commandId: CommandId.make("stop"),
+      threadId,
+    });
+    const held = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+      (run) => run.status === "queued",
+    )!;
+    assert.isTrue(held.queueHeld);
+    assert.deepEqual(yield* shells, [true, true, true]);
+
+    yield* orchestrator.dispatch({
+      type: "queued-run.cancel",
+      commandId: CommandId.make("cancel-queued"),
+      threadId,
+      runId: held.id,
+    });
+    assert.deepEqual(yield* shells, [false, false, false]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("a run Stop reached cannot delegate or start a watch, even after it ends", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;

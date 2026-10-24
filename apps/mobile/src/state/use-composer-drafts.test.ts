@@ -10,6 +10,7 @@ import {
   v2ShellSnapshot,
   v2ThreadShell,
 } from "../../../../packages/client-runtime/src/state/orchestrationV2TestFixtures";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { afterEach, describe, expect, it } from "@effect/vitest";
@@ -20,6 +21,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  RunId,
   ThreadId,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2ShellSnapshot,
@@ -206,6 +208,7 @@ import {
   setComposerDraftText,
   insertComposerDraftContext,
   insertComposerDraftText,
+  markComposerDraftModelSelectionDelivered,
   rememberComposerDraftSelection,
   setComposerDraftAttachmentUpload,
   waitForComposerDraftsLoaded,
@@ -348,6 +351,7 @@ function modelReconciliationHarness(
       expect(registry.get(selectedShell)?.id).toBe(selectedThreadId);
     },
     model: () => registry.get(shells.threadShellAtom({ environmentId, threadId }))!.modelSelection,
+    sequence: () => Option.getOrThrow(registry.get(shellStateAtom).snapshot).snapshotSequence,
   };
 }
 
@@ -494,6 +498,135 @@ describe("mobile composer drafts", () => {
     expect(getComposerDraftSnapshot(key)).toEqual(before);
     h.setStatus("live");
     expect(appAtomRegistry.get(composerDraftsAtom)[key]).toBeUndefined();
+  });
+
+  it("releases a delivered pick once no run waits to start, even if the thread already moved elsewhere", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const threadId = ThreadId.make("thread-1");
+    const key = `${environmentId}:${threadId}`;
+    const pick = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-opus-5-5" };
+    const elsewhere = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6.1-sol" };
+    const startedAt = DateTime.makeUnsafe("2026-10-23T23:40:00.000Z");
+    const h = modelReconciliationHarness(environmentId, threadId);
+    updateComposerDraftSettings(key, { modelSelection: pick });
+    // Before the shell includes the delivery, nothing it shows is about the picked run.
+    h.update({ latestRunId: RunId.make("run-active"), status: "running", hasQueuedRuns: false });
+    markComposerDraftModelSelectionDelivered(key, pick, h.sequence() + 1);
+    h.flush();
+    expect(getComposerDraftSnapshot(key).modelSelection).toEqual(pick);
+
+    // Queued behind it: the server switches the thread only when the picked run starts.
+    h.update({ latestRunId: RunId.make("run-picked"), status: "queued", hasQueuedRuns: true });
+    expect(getComposerDraftSnapshot(key).modelSelection).toEqual(pick);
+
+    // The phone missed the thread running on the pick; another client moved it since.
+    h.update({
+      modelSelection: elsewhere,
+      latestRunId: RunId.make("run-later"),
+      status: "running",
+      latestRunStartedAt: startedAt,
+      hasQueuedRuns: false,
+    });
+    expect(getComposerDraftSnapshot(key).modelSelection).toBeUndefined();
+  });
+
+  it("releases a pick whose retried delivery returns a receipt the shell already passed", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const threadId = ThreadId.make("thread-1");
+    const key = `${environmentId}:${threadId}`;
+    const pick = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-opus-5-5" };
+    const elsewhere = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6.1-sol" };
+    const h = modelReconciliationHarness(environmentId, threadId);
+    updateComposerDraftSettings(key, { modelSelection: pick });
+    // The first delivery's reply was lost; the picked run ran and the thread moved on.
+    const firstDelivery = h.sequence() + 1;
+    h.update({ latestRunId: RunId.make("run-picked"), status: "running", hasQueuedRuns: false });
+    h.update({ modelSelection: elsewhere, latestRunId: RunId.make("run-later") });
+    expect(getComposerDraftSnapshot(key).modelSelection).toEqual(pick);
+
+    markComposerDraftModelSelectionDelivered(key, pick, firstDelivery);
+    h.flush();
+
+    expect(getComposerDraftSnapshot(key).modelSelection).toBeUndefined();
+  });
+
+  it.each([
+    ["held behind a failed run", { latestRunId: "run-failed", status: "failed" }],
+    [
+      "held behind a run being stopped",
+      { latestRunId: "run-stopping", latestRunStopRequested: true },
+    ],
+    ["passed by a later run started ahead of it", { latestRunId: "run-reordered" }],
+  ] as const)("keeps a delivered pick while its run still waits, %s", (_case, latest) => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const threadId = ThreadId.make("thread-1");
+    const key = `${environmentId}:${threadId}`;
+    const pick = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-opus-5-5" };
+    const h = modelReconciliationHarness(environmentId, threadId);
+    updateComposerDraftSettings(key, { modelSelection: pick });
+    markComposerDraftModelSelectionDelivered(key, pick, h.sequence() + 1);
+
+    h.update({
+      status: "running",
+      latestRunStartedAt: DateTime.makeUnsafe("2026-10-23T23:40:00.000Z"),
+      ...latest,
+      latestRunId: RunId.make(latest.latestRunId),
+      hasQueuedRuns: true,
+    });
+
+    expect(getComposerDraftSnapshot(key).modelSelection).toEqual(pick);
+  });
+
+  it("keeps a delivered pick when the server does not report queued runs", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const threadId = ThreadId.make("thread-1");
+    const key = `${environmentId}:${threadId}`;
+    const pick = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-opus-5-5" };
+    const h = modelReconciliationHarness(environmentId, threadId);
+    updateComposerDraftSettings(key, { modelSelection: pick });
+    markComposerDraftModelSelectionDelivered(key, pick, h.sequence() + 1);
+
+    h.update({ latestRunId: RunId.make("run-later"), status: "running" });
+
+    expect(getComposerDraftSnapshot(key).modelSelection).toEqual(pick);
+  });
+
+  it("keeps an undelivered pick while the thread runs on another model", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const threadId = ThreadId.make("thread-1");
+    const key = `${environmentId}:${threadId}`;
+    const pick = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-opus-5-5" };
+    const h = modelReconciliationHarness(environmentId, threadId);
+    updateComposerDraftSettings(key, { modelSelection: pick });
+    h.flush();
+
+    h.update({
+      latestRunId: RunId.make("run-later"),
+      status: "running",
+      latestRunStartedAt: DateTime.makeUnsafe("2026-10-23T23:40:00.000Z"),
+      hasQueuedRuns: false,
+    });
+    expect(getComposerDraftSnapshot(key).modelSelection).toEqual(pick);
+  });
+
+  it("does not let an earlier delivery release a fresh pick of the same model", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const threadId = ThreadId.make("thread-1");
+    const key = `${environmentId}:${threadId}`;
+    const pick = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-opus-5-5" };
+    const h = modelReconciliationHarness(environmentId, threadId);
+    updateComposerDraftSettings(key, { modelSelection: pick });
+    markComposerDraftModelSelectionDelivered(key, pick, h.sequence());
+    updateComposerDraftSettings(key, { modelSelection: pick });
+    h.flush();
+
+    h.update({
+      latestRunId: RunId.make("run-later"),
+      status: "running",
+      latestRunStartedAt: DateTime.makeUnsafe("2026-10-23T23:40:00.000Z"),
+      hasQueuedRuns: false,
+    });
+    expect(getComposerDraftSnapshot(key).modelSelection).toEqual(pick);
   });
 
   it("releases an inactive thread pick only after its queued model becomes durable", () => {

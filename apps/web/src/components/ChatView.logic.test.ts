@@ -10,7 +10,7 @@ import {
 } from "./ChatView.logic";
 import { recallCheckoutIsRepo, rememberCheckoutIsRepo } from "./ChatView.logic";
 import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
-import { deriveProviderInstanceEntries } from "../providerInstances";
+import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
 import { ensureInlineContextReferences } from "../lib/composerContextReferences";
 import { terminalContextReference } from "../lib/composerContextRecords";
 import {
@@ -39,6 +39,7 @@ import type { Thread } from "../types";
 import { makeThreadFixture, makeThreadProjectionFixture } from "../test-fixtures";
 import {
   getAntigravitySendBlockReason,
+  getUnchosenProviderSwitchBlockReason,
   resolveComposerProviderSelection,
   resolveWorktreeSetupProgress,
   peekRememberedThreadTimeline,
@@ -647,6 +648,92 @@ describe("resolveComposerProviderSelection", () => {
 
     expect(selection.selectedProviderEntry).toBeUndefined();
     expect(selection.unavailableProviderInstanceId).toBe(missingInstanceId);
+  });
+
+  describe("a started chat whose own account is turned off or missing", () => {
+    const work = entry("claudeAgent", "claude_work", { displayName: "Claude - work" });
+    const other = entry("claudeAgent", "claude_other", { displayName: "Claude - other" });
+
+    function attempt(input: {
+      entries: ReadonlyArray<ProviderInstanceEntry>;
+      threadStarted?: boolean;
+      chosenInstanceId?: ProviderInstanceId | null;
+    }) {
+      const threadInstanceId = work.instanceId;
+      const chosenInstanceId = input.chosenInstanceId ?? null;
+      // The composer passes no driver lock when the server can hand context between providers.
+      const selection = resolveComposerProviderSelection({
+        entries: input.entries,
+        candidateInstanceIds: [chosenInstanceId, threadInstanceId, other.instanceId],
+        lockedProvider: null,
+        lockedInstanceId: threadInstanceId,
+      });
+      return {
+        selectedInstanceId: selection.selectedProviderEntry?.instanceId,
+        blockReason: getUnchosenProviderSwitchBlockReason({
+          threadStarted: input.threadStarted ?? true,
+          threadInstanceId,
+          chosenInstanceId,
+          selectedInstanceId: selection.selectedProviderEntry?.instanceId,
+          entries: input.entries,
+        }),
+      };
+    }
+
+    it("blocks the send instead of moving the chat to another account when its own is turned off", () => {
+      const result = attempt({ entries: [{ ...work, enabled: false }, other] });
+
+      expect(result.selectedInstanceId).toBe(other.instanceId);
+      expect(result.blockReason).toBe(
+        "Claude - work is turned off, so this chat can't continue on it. Turn it back on in provider settings, or pick a model to move this chat.",
+      );
+    });
+
+    it("blocks the send when the chat's account is no longer set up", () => {
+      const result = attempt({ entries: [other] });
+
+      expect(result.selectedInstanceId).toBe(other.instanceId);
+      expect(result.blockReason).toBe(
+        "This chat's account (claude_work) is no longer set up. Add it back in provider settings, or pick a model to move this chat.",
+      );
+    });
+
+    it("sends on another account the owner picked on purpose", () => {
+      const result = attempt({
+        entries: [{ ...work, enabled: false }, other],
+        chosenInstanceId: other.instanceId,
+      });
+
+      expect(result.selectedInstanceId).toBe(other.instanceId);
+      expect(result.blockReason).toBeNull();
+    });
+
+    it("keeps sending on the chat's own account while it is on", () => {
+      const result = attempt({ entries: [work, other] });
+
+      expect(result.selectedInstanceId).toBe(work.instanceId);
+      expect(result.blockReason).toBeNull();
+    });
+
+    it("asks for a pick when the chat's account is back on but the composer still points elsewhere", () => {
+      const reason = getUnchosenProviderSwitchBlockReason({
+        threadStarted: true,
+        threadInstanceId: work.instanceId,
+        chosenInstanceId: null,
+        selectedInstanceId: other.instanceId,
+        entries: [work, other],
+      });
+
+      expect(reason).toBe(
+        "Pick Claude - work in the model menu to keep this chat on it, or pick another model to move this chat.",
+      );
+    });
+
+    it("lets a chat that has not started yet use whichever account is available", () => {
+      const result = attempt({ entries: [other], threadStarted: false });
+
+      expect(result.blockReason).toBeNull();
+    });
   });
 
   it("keeps the session's continuation group when another instance was selected", () => {
